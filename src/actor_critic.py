@@ -20,28 +20,50 @@ from typing import Tuple
 
 class AtariEncoder(nn.Module):
     r"""
-    PPO CNN encoder for Atari (84*84*4 input).
+    PPO CNN encoder for Atari/Minatar.
     """
 
-    def __init__(self, in_channels: int = 4, hidden_dim: int = 512):
+    def __init__(self, in_channels: int = 4, hidden_dim: int = 512, input_size: int = 84):
 
         super().__init__()
         self.cnn_out_dim = 64 * 7 * 7
         self.hidden_dim = hidden_dim
         self.in_channels = in_channels
 
-        self.cnn = nn.Sequential( # (32, 20, 20) -> (64, 9, 9) -> (64, 7, 7)
-            nn.Conv2d(self.in_channels, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
+        # minatar size
+        if input_size <= 16:
+            self.cnn = nn.Sequential(
+                nn.Conv2d(in_channels, 16, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Flatten(),
+            )
+
+        # atari size
+        else:
+            self.cnn = nn.Sequential( # (32, 20, 20) -> (64, 9, 9) -> (64, 7, 7)
+                nn.Conv2d(self.in_channels, 32, kernel_size=8, stride=4),
+                nn.ReLU(),
+                nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(64, 64, kernel_size=3, stride=1),
+                nn.ReLU(),
+                nn.Flatten(),
+            )
+
+        # self.fc = nn.Sequential(
+        #     nn.Linear(self.cnn_out_dim, self.hidden_dim),
+        #     nn.ReLU(),
+        # )
+
+        # infer CNN output dimension dynamically
+        with torch.no_grad():
+            dummy = torch.zeros(1, in_channels, input_size, input_size)
+            cnn_out_dim = self.cnn(dummy).shape[1]
 
         self.fc = nn.Sequential(
-            nn.Linear(self.cnn_out_dim, self.hidden_dim),
+            nn.Linear(cnn_out_dim, hidden_dim),
             nn.ReLU(),
         )
 
@@ -97,11 +119,15 @@ class PPORVActorCritic(nn.Module):
     The weights are initialized orthogonally with a small policy logit scale.
     """
 
-    def __init__(self, n_actions: int, in_channels: int = 4, hidden_dim: int = 512, policy_logit_scale: float = 0.01):
+    def __init__(self, n_actions: int, in_channels: int = 4, hidden_dim: int = 512, input_size: int = 84, policy_logit_scale: float = 0.01):
         super().__init__()
         self.policy_logit_scale = policy_logit_scale
         
-        self.encoder = AtariEncoder(in_channels, hidden_dim)
+        self.encoder = AtariEncoder(
+            in_channels, 
+            hidden_dim,
+            input_size
+        )
         self.policy_head = nn.Linear(hidden_dim, n_actions)
         self.critic_head = RelativeCritic(hidden_dim)
         self._init_weights(self.policy_logit_scale)

@@ -29,7 +29,7 @@ relative-value-learning/
 ```bash
 pip install -r requirements.txt
 
-pytest tests/ -v
+PYTHONPATH=. pytest -v
 
 # train on MinAtar
 python src/main.py --env minatar:asterix --seed 0
@@ -44,7 +44,7 @@ python src/main.py --env minatar:asterix --no-offset --seed 0
 
 - [x] `src/bellman.py`: implement `compute_lambda_return` and the full `compute_nstep_target` (with terminal flag handling at step n)
 - [ ] `src/rgae.py`: vectorize `compute_trajectory_offsets` (currently O(N^2) loop)
-- [ ] `tests/test_theory.py`: run all tests: `pytest rv_learning/tests/`
+- [x] `tests/test_theory.py`: run all tests: `PYTHONPATH=. pytest -v`
 - [ ] `src/rollout_buffer.py`: implement `compute_rgae()` method (calls src.rgae per env)
 - [ ] `src/train.py`: hook up a real vectorized gym env; verify observation normalization
 - [ ] `src/run.py`: implement `make_minatar_envs` vectorized wrapper

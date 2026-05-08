@@ -72,24 +72,24 @@ class RolloutBuffer:
         self.actions = torch.zeros(T, N, dtype=torch.long)
         self.rewards = torch.zeros(T, N)
         self.dones = torch.zeros(T, N)
-        self. = torch.zeros(T, N)
+        self.log_probs = torch.zeros(T, N)
 
         # create episode IDs
-        self.ep_ids    = torch.zeros(T, N, dtype=torch.long)
+        self.ep_ids = torch.zeros(T, N, dtype=torch.long)
 
         # empty tensors to pass to R-GAE
-        self. = torch.zeros(T, N)
+        self.advantages = torch.zeros(T, N)
         self.returns = torch.zeros(T, N)
         self.V_rel = torch.zeros(T + 1, N)
 
     def store(
         self,
         obs: torch.Tensor,
-        obs_next torch.Tensor,
+        obs_next: torch.Tensor,
         action: torch.Tensor,
         reward: torch.Tensor,
         done: torch.Tensor,
-        log_prob torch.Tensor,
+        log_prob: torch.Tensor,
         ep_id: torch.Tensor,
     ):
         r"""

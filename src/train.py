@@ -8,6 +8,7 @@ ranking, computation of R-GAE, and gradient updates using PPO + RV.
 import torch
 import numpy as np
 from typing import Optional
+from tqdm import tqdm
 
 from src.actor_critic import PPORVActorCritic
 from src.rollout import RolloutBuffer
@@ -124,7 +125,7 @@ def compute_advantages(
             advantages_env, _ = compute_rgae(
                 rewards = buffer.rewards[:, env_idx],
                 V_rel = V_rel,
-                dones = dones_env,
+                done = dones_env,
                 gamma = cfg.gamma,
                 lam = cfg.lam,
             )
@@ -140,7 +141,7 @@ def train(
     n_actions: int,
     total_frames: int = 4e7,
     cfg: PPORVConfig = None,
-    device: str,
+    device: Optional[str] = None,
     use_offset: bool = True,
     log_interval: int = 10,
 ):
@@ -160,17 +161,29 @@ def train(
     if cfg is None:
         cfg = PPORVConfig()
 
-    model = PPORVActorCritic(n_actions=n_actions).to(device)
+    if device is None:
+        device = ("cuda" if torch.cuda.is_available() else "cpu")
+
+
+
+    obs_np = envs.reset()
+    obs_shape = obs_np.shape[1:] # (C,H,W)
+
+    model = PPORVActorCritic(
+        n_actions=n_actions,
+        in_channels=obs_shape[0],
+        input_size=obs_shape[1],
+    ).to(device)
     updater = PPORVUpdater(model, cfg)
     buffer = RolloutBuffer(
         rollout_length = cfg.rollout_length,
         n_envs  = cfg.n_envs,
-        obs_shape = (4, 84, 84), # TODO matches atari
+        obs_shape = obs_shape,
         same_ep_prob = cfg.same_ep_prob,
         device = device,
     )
 
-    obs_np = envs.reset()
+
     obs = torch.tensor(obs_np, dtype=torch.float32) / 255.0
     ep_ids = torch.zeros(cfg.n_envs, dtype=torch.long)
 
@@ -178,7 +191,8 @@ def train(
     n_rollouts = int(total_frames / frames_per_rollout)
     frames_collected = 0
 
-    for rollout_idx in range(n_rollouts):
+    pbar = tqdm(range(n_rollouts), total=n_rollouts, desc="Training", unit="rollout")
+    for rollout_idx in pbar:
         buffer.reset()
 
         # collect rollout

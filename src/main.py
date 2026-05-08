@@ -21,10 +21,72 @@ import argparse
 import torch
 import numpy as np
 from minatar import Environment
-import envpool
+# import envpool
 import re
 
 from src.train import train, PPORVConfig
+
+
+class MinAtarVecEnv:
+    r"""
+    Simple sequential vectorized wrapper for MinAtar environments.
+
+    API matches the subset used in train.py:
+        - reset() -> np.ndarray (N, C, H, W)
+        - step(actions) -> (obs, rewards, dones, infos)
+
+    MinAtar observations are originally (H, W, C); this wrapper
+    converts them to channel-first (C, H, W).
+    """
+
+    def __init__(self, game: str, n_envs: int):
+        self.n_envs = n_envs
+        self.envs = [Environment(game) for _ in range(n_envs)]
+
+        # infer observation shape
+        sample_obs = self.envs[0].state()  # (H, W, C)
+        h, w, c = sample_obs.shape
+        self.obs_shape = (c, h, w)
+
+    @staticmethod
+    def _transpose(obs: np.ndarray) -> np.ndarray:
+        # (H, W, C) -> (C, H, W)
+        return np.transpose(obs, (2, 0, 1)).astype(np.float32)
+
+    def reset(self) -> np.ndarray:
+        observations = []
+
+        for env in self.envs:
+            env.reset()
+            observations.append(self._transpose(env.state()))
+
+        return np.stack(observations, axis=0)
+
+    def step(self, actions):
+        next_obs = []
+        rewards = []
+        dones = []
+        infos = []
+
+        for env, action in zip(self.envs, actions):
+            reward, done = env.act(int(action))
+
+            if done:
+                env.reset()
+
+            obs = self._transpose(env.state())
+
+            next_obs.append(obs)
+            rewards.append(reward)
+            dones.append(done)
+            infos.append({})
+
+        return (
+            np.stack(next_obs, axis=0),
+            np.asarray(rewards, dtype=np.float32),
+            np.asarray(dones, dtype=np.bool_),
+            infos,
+        )
 
 
 def make_minatar_envs(game: str, n_envs: int):
@@ -33,12 +95,7 @@ def make_minatar_envs(game: str, n_envs: int):
     shapes are (H, W, C) — note channel-last, needs to be transposed.
     """
 
-    # TODO: wrap in a vectorized env class compatible with train.py's envs API
-    # MinAtar is not natively vectorized — simple sequential wrapper needed.
-    raise NotImplementedError(
-        "Implement a vectorized wrapper for MinAtar. "
-        "Each env.act(action) returns (reward, done); obs = env.state()."
-    )
+    return MinAtarVecEnv(game, n_envs)
 
 
 def make_atari_envs(game: str, n_envs: int):
@@ -72,7 +129,7 @@ def main():
 
     device = ("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"Running PPO+RV (env={args.env}, seed={args.seed}) on {device}...")
+    print(f"Running PPO + RV (env={args.env}, seed={args.seed}) on {device}...")
 
     cfg = PPORVConfig(n_envs=args.n_envs)
 
@@ -91,12 +148,12 @@ def main():
 
     # train
     model = train(
-        envs         = envs,
-        n_actions    = n_actions,
+        envs = envs,
+        n_actions = n_actions,
         total_frames = args.total_frames,
-        cfg          = cfg,
-        device       = device,
-        use_offset   = not args.no_offset,
+        cfg = cfg,
+        device = device,
+        use_offset = not args.no_offset,
     )
 
     # checkpoint

@@ -169,7 +169,7 @@ def compute_trajectory_offsets(delta_fn, all_start_states: torch.Tensor) -> torc
     return V_hat
 
 
-def apply_offset_to_rollout(states: torch.Tensor, done: torch.Tensor, V_hat_starts: torch.Tensor, start_indices: torch.Tensor) -> torch.Tensor:
+def apply_offset_to_rollout(delta_fn, states: torch.Tensor, done: torch.Tensor, V_hat_starts: torch.Tensor, start_indices: torch.Tensor) -> torch.Tensor:
     r"""
     Compute offset-corrected relative values V_\theta(s). For each 
     state, we use the most recent start state in the same episode.

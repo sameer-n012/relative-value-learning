@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from typing import Dict
 
 from src.actor_critic import PPORVActorCritic
-from src.rollout_buffer import RolloutBatch, RolloutBuffer
-from src.bellman import compute_1step_target
+from src.rollout import RolloutBatch, RolloutBuffer
+from src.bellman import compute_step_target
 
 
 @dataclass
