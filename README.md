@@ -17,7 +17,7 @@ relative-value-learning/
 |  |-- train.py         # Main training loop
 |  |-- main.py          # Entry point
 |-- tests/
-|  |-- verify.py        # Unit tests
+|  |-- test_theory.py   # Unit tests
 |-- checkpoints/        # Model checkpoints   
 |-- results/            # Results + figures
 ```

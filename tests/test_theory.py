@@ -17,7 +17,7 @@ import torch
 import pytest
 from src.actor_critic import PPORVActorCritic, RelativeCritic
 from src.rgae import compute_rgae, compute_relative_values
-from src.bellman import compute_1step_target
+from src.bellman import compute_step_target
 
 @pytest.fixture
 def model():
@@ -96,17 +96,17 @@ def test_rgae_unbiasedness():
 
 def test_1step_target_both_terminal(model):
     B = 2
-    obs   = torch.randn(B, 4, 84, 84)
-    r_i   = torch.tensor([1.0, 2.0])
-    r_j   = torch.tensor([0.5, 1.0])
-    d_i   = torch.ones(B)
-    d_j   = torch.ones(B)
+    obs = torch.randn(B, 4, 84, 84)
+    r_i = torch.tensor([1.0, 2.0])
+    r_j = torch.tensor([0.5, 1.0])
+    d_i = torch.ones(B)
+    d_j = torch.ones(B)
 
-    y_ij = compute_1step_target(
-        delta_fn   = model.delta,
-        s_i        = obs, r_i=r_i, d_i=d_i, s_i_next=obs,
-        s_j        = obs, r_j=r_j, d_j=d_j, s_j_next=obs,
-        gamma      = 0.99,
+    y_ij = compute_step_target(
+        delta_fn = model.delta,
+        s_i = obs, r_i=r_i, d_i=d_i, s_i_next=obs,
+        s_j = obs, r_j=r_j, d_j=d_j, s_j_next=obs,
+        gamma = 0.99,
     )
 
     expected = r_i - r_j
@@ -126,7 +126,7 @@ def test_1step_target_both_nonterminal(model):
     gamma = 0.99
 
     with torch.no_grad():
-        y_ij = compute_1step_target(
+        y_ij = compute_step_target(
             model.delta,
             obs, r_i, d_i, obs_next,
             obs, r_j, d_j, obs_next,

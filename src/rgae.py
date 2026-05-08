@@ -55,10 +55,10 @@ def compute_relative_values(
 
 def compute_rgae(
     rewards: torch.Tensor,
-    V_rel:   torch.Tensor,
-    done:   torch.Tensor,
-    gamma:   float,
-    lam:     float,
+    V_rel: torch.Tensor,
+    done: torch.Tensor,
+    gamma: float,
+    lam: float,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Compute Relative GAE advantages A_t and relative TD residuals \delta_t.
@@ -110,7 +110,7 @@ def extract_start_states(states: torch.Tensor, done: torch.Tensor) -> Tuple[torc
 
     Args:
         states:         states of shape (T, *obs_shape).
-        done:          done flags of shape (T,).
+        done:           done flags of shape (T,).
 
     Returns:
         start_states:   start states from the rollout of shape (T, *obs_shape)

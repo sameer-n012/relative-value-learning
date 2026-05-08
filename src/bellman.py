@@ -25,7 +25,7 @@ def _bootstrap_delta(
     s_j_next: torch.Tensor,
     r_j: torch.Tensor,
 ) -> torch.Tensor:
-    """
+    r"""
     Compute the well-posed bootstrap term delta_ij from Eq. (20) / Appendix A.
  
     Rewrites \Delta(s_{i,next}, s_{j,next}) in terms of non-terminal
@@ -41,8 +41,8 @@ def _bootstrap_delta(
     """
 
     c1 = (1.0 - d_i) * (1.0 - d_j)
-    c2    = d_i * (1.0 - d_j)
-    c3    = (1.0 - d_i) * d_j
+    c2 = d_i * (1.0 - d_j)
+    c3 = (1.0 - d_i) * d_j
  
     delta_ij = (
         c1 * delta_fn(s_i_next, s_j_next)
@@ -149,9 +149,6 @@ def compute_nstep_target(delta_fn, traj_i, traj_j, gamma: float, n: int) -> torc
 
     s_i_n, r_i_n, d_i_n, sn_i_n = traj_i[min_len - 1]
     s_j_n, r_j_n, d_j_n, sn_j_n = traj_j[min_len - 1]
-
-    d_i_eff = 
-    d_j_eff = 
 
     # extract s_next and apply case split
     bootstrap = _bootstrap_delta(

@@ -102,7 +102,7 @@ class PPORVUpdater:
 
         # compute 1-step target
         with torch.no_grad():
-            y_ij = compute_1step_target(
+            y_ij = compute_step_target(
                 delta_fn=self.model.delta,
                 s_i=batch.obs_i, r_i=batch.r_i, d_i=batch.d_i, s_i_next=batch.obs_i_next,
                 s_j=batch.obs_j, r_j=batch.r_j, d_j=batch.d_j, s_j_next=batch.obs_j_next,
