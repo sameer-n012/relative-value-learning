@@ -1,0 +1,6 @@
+torch>=2.0.0
+gymnasium[atari]>=0.29.0
+numpy>=1.24.0
+minatar>=1.0.0
+pytest>=7.0.0
+# envpool>=0.6.0
