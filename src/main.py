@@ -27,6 +27,10 @@ import re
 from src.train import train, PPORVConfig
 
 
+def slugify(s):
+    return re.sub(r'[^A-Za-z0-9_]', '_', s)
+
+
 class MinAtarVecEnv:
     r"""
     Simple sequential vectorized wrapper for MinAtar environments.
@@ -121,7 +125,10 @@ def main():
     parser.add_argument("--total-frames", type=int, default=1e7)
     parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--no-offset", action="store_true") # disable trajectory ranking (ablation: zero offset)
-    parser.add_argument("--results-file", type=str, default="results/results.json")
+    parser.add_argument("--results-file", type=str, default=None)
+    parser.add_argument("--checkpoint-file", type=str, default=None)
+    parser.add_argument("--n-step", type=int, default=5)
+    parser.add_argument("--baseline", action="store_true")
     args = parser.parse_args()
 
     # set rand seed
@@ -132,7 +139,31 @@ def main():
 
     print(f"Running PPO + RV (env={args.env}, seed={args.seed}) on {device}...")
 
-    cfg = PPORVConfig(n_envs=args.n_envs)
+    cfg = PPORVConfig(n_envs=args.n_envs, n_step=args.n_step)
+    # cfg = PPORVConfig(
+    #     rollout_length = 32,
+    #     n_envs         = 8,
+    #     n_epochs       = 4,
+    #     minibatch_size = 64,
+    #     lr             = 3e-4,
+    #     gamma          = 0.99,
+    #     lam            = 0.95,
+    #     clip_eps       = 0.2,   # standard PPO uses 0.2, not 0.1
+    #     entropy_coef   = 0.01,
+    #     critic_coef    = 1.25,
+    #     n_step         = 1,
+    # )
+    # cfg = PPORVConfig(
+    #     rollout_length = 128,
+    #     n_envs         = 8,
+    #     n_epochs       = 5,
+    #     minibatch_size = 128,
+    #     lr             = 2.5e-4,
+    #     clip_eps       = 0.1,
+    #     entropy_coef   = 0.01,
+    #     critic_coef    = 1.25,
+    #     n_step         = 1,
+    # )
 
     # create envs
     if args.env.startswith("minatar:"):
@@ -146,6 +177,16 @@ def main():
         print(f"\tUnknown env: {args.env}")
         return
 
+    if args.results_file is None:
+        results_path = f"results/results_{slugify(args.env)}"
+        if args.baseline:
+            results_path += "_baseline"
+        results_path += ".json"
+        args.results_file = results_path
+
+    print(f"Arguments: {vars(args)}")
+
+
     # train
     model = train(
         envs = envs,
@@ -153,12 +194,17 @@ def main():
         total_frames = args.total_frames,
         cfg = cfg,
         device = device,
-        use_offset = not args.no_offset,
-        results_file=args.results_file
+        args=args
     )
 
     # checkpoint
-    ckpt_path = f"checkpoints/{re.sub(r'[^A-Za-z0-9_]', '_', args.env)}_seed{args.seed}.pt"
+    if args.checkpoint_file is None:
+        ckpt_path = f"checkpoints/checkpoint_{slugify(args.env)}"
+        if args.baseline:
+            ckpt_path += "_baseline"
+        ckpt_path += ".pt"
+    else:
+        ckpt_path = args.checkpoint_file
     torch.save(model.state_dict(), ckpt_path)
     print(f"\tSaved checkpoint: {ckpt_path}")
 

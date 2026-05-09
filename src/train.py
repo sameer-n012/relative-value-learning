@@ -15,7 +15,7 @@ import time
 
 
 
-from src.actor_critic import PPORVActorCritic
+from src.actor_critic import PPORVActorCritic, PPOAVActorCritic
 from src.rollout import RolloutBuffer
 from src.ppo import PPORVUpdater, PPORVConfig
 from src.rgae import (
@@ -52,6 +52,11 @@ def collect_rollout(
         ep_ids: the updated episode ID counter per env.
     """
 
+    returns = []
+    eps_lengths = []
+    curr_returns = torch.zeros(buffer.N)
+    curr_lengths = torch.zeros(buffer.N)
+
     model.eval()
     with torch.no_grad():
         for i in range(buffer.T):
@@ -69,24 +74,36 @@ def collect_rollout(
             rewards = torch.tensor(rewards_np, dtype=torch.float32)
             dones = torch.tensor(dones_np, dtype=torch.float32)
 
+            curr_returns += rewards
+            curr_lengths += 1
+            for env_idx, done in enumerate(dones):
+                if done:
+                    returns.append(curr_returns[env_idx].item())
+                    eps_lengths.append(curr_lengths[env_idx].item())
+                    curr_returns[env_idx] = 0.0
+                    curr_lengths[env_idx] = 0.0
+
             # update episode IDs when done with episode
             ep_ids = ep_ids + dones.long()
 
             buffer.store(
-                obs      = obs,
+                obs = obs,
                 obs_next = next_obs,
-                action   = actions.cpu(),
-                reward   = rewards,
-                done     = dones,
+                action = actions.cpu(),
+                reward = rewards,
+                done = dones,
                 log_prob = log_prob.cpu(),
-                ep_id    = ep_ids.clone(),
+                ep_id = ep_ids.clone(),
             )
 
             obs = next_obs
 
     model.train()
 
-    return obs, ep_ids
+    mean_return = np.mean(returns) if returns else float("nan")
+    mean_length = np.mean(eps_lengths) if eps_lengths else float("nan")
+
+    return obs, ep_ids, {"mean_return": mean_return, "mean_length": mean_length}
 
 
 def compute_advantages(
@@ -101,6 +118,32 @@ def compute_advantages(
     start states per environment, computing pairwise offsets (trajectory ranking),
     and calculating V_\theta and R-GAE.
     """
+
+    if not model.is_relative:
+        # Standard GAE with absolute values
+        model.eval()
+        with torch.no_grad():
+            all_obs = torch.cat([
+                buffer.obs.view(-1, *buffer.obs_shape),
+                buffer.obs_next[-1].view(buffer.N, *buffer.obs_shape),
+            ], dim=0)
+            # values for all T*N obs + N final obs
+            obs_flat = buffer.obs.reshape(-1, *buffer.obs_shape)
+            V = model.value(obs_flat).view(buffer.T, buffer.N)
+            V_next_last = model.value(buffer.obs_next[-1])
+
+        for env_idx in range(buffer.N):
+            V_env = torch.cat([V[:, env_idx], V_next_last[env_idx:env_idx+1]])
+            adv_env, _ = compute_rgae(
+                rewards=buffer.rewards[:, env_idx],
+                V_rel=V_env,
+                done=buffer.dones[:, env_idx],
+                gamma=cfg.gamma, lam=cfg.lam,
+            )
+            buffer.advantages[:, env_idx] = adv_env
+            buffer.returns[:, env_idx]    = adv_env + V[:, env_idx]
+        model.train()
+        return
 
     model.eval()
     with torch.no_grad():
@@ -158,9 +201,8 @@ def train(
     total_frames: int = 4e7,
     cfg: PPORVConfig = None,
     device: Optional[str] = None,
-    use_offset: bool = True,
     log_interval: int = 100,
-    results_file: str = None
+    args = None # extra argparse args
 ):
     """
     Full PPO+RV training loop.
@@ -182,17 +224,26 @@ def train(
         device = ("cuda" if torch.cuda.is_available() else "cpu")
 
     train_results = asdict(cfg)
+    train_results.update(vars(args))
     train_results["device"] = device
     train_results["log"] = []
 
     obs_np = envs.reset()
     obs_shape = obs_np.shape[1:] # (C,H,W)
 
-    model = PPORVActorCritic(
-        n_actions=n_actions,
-        in_channels=obs_shape[0],
-        input_size=obs_shape[1],
-    ).to(device)
+
+    if not args.baseline:
+        model = PPORVActorCritic(
+            n_actions=n_actions,
+            in_channels=obs_shape[0],
+            input_size=obs_shape[1],
+        ).to(device)
+    else:
+        model = PPOAVActorCritic(
+            n_actions=n_actions,
+            in_channels=obs_shape[0],
+            input_size=obs_shape[1],
+        ).to(device)
     updater = PPORVUpdater(model, cfg)
     buffer = RolloutBuffer(
         rollout_length = cfg.rollout_length,
@@ -218,11 +269,11 @@ def train(
         t0 = time.perf_counter()
 
         # collect rollout
-        obs, ep_ids = collect_rollout(envs, model, buffer, obs, ep_ids, device)
+        obs, ep_ids, rollout_stats = collect_rollout(envs, model, buffer, obs, ep_ids, device)
         frames_collected += frames_per_rollout
 
         # compute r-gae
-        compute_advantages(buffer, model, cfg, device, use_offset=use_offset)
+        compute_advantages(buffer, model, cfg, device, use_offset=not args.no_offset)
 
         # gradient update
         epoch_logs = {}
@@ -234,6 +285,8 @@ def train(
         train_results["log"].append(epoch_logs)
         train_results["log"][-1]["frames_collected"] = frames_collected
         train_results["log"][-1]["rollout_idx"] = rollout_idx
+        train_results["log"][-1]["mean_return"] = rollout_stats["mean_return"]
+        train_results["log"][-1]["mean_eps_length"] = rollout_stats["mean_length"]
         train_results["log"][-1]["time"] = t0
 
         if rollout_idx % log_interval == 0:
@@ -242,13 +295,15 @@ def train(
                 f" policy={epoch_logs.get('loss_policy', 0):.4f}" +
                 f" critic={epoch_logs.get('loss_critic', 0):.4f}" +
                 f" entropy={epoch_logs.get('loss_entropy', 0):.4f}" +
-                f" total={epoch_logs.get('loss_total', 0):.4f}"
+                f" total={epoch_logs.get('loss_total', 0):.4f}" +
+                f" return={rollout_stats["mean_return"]:.4f}" +
+                f" length={rollout_stats["mean_length"]:.4f}"
             )
 
         pbar.set_postfix({"loss": f"{epoch_logs.get('loss_total', 0):.3f}"})
         
-        if results_file is not None:
-            with open(results_file, "w") as f:
+        if args.results_file is not None:
+            with open(args.results_file, "w") as f:
                 json.dump(train_results, f, indent=2)
 
     return model

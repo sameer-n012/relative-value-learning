@@ -94,10 +94,15 @@ class PPORVUpdater:
         L_critic = 0.5 * E_{(i,j) \sim \mu} [ (\Delta_\theta(s_i, s_j) - y^(n)_ij)^2 ]
         """
 
+        if not self.model.is_relative:
+            # Standard absolute value MSE: V(s) vs discounted returns
+            values = self.model.value(batch.obs)
+            return 0.5 * F.mse_loss(values, batch.returns)
+
         # current pred
         delta_pred = self.model.delta(batch.obs_i, batch.obs_j)
 
-        # compute 1-step target
+        # compute 1/n-step target
         with torch.no_grad():
             if self.cfg.n_step > 1 and batch.traj_i is not None:
                 traj_i = [(s.to(self.model.device), r.to(self.model.device),

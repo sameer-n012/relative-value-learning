@@ -26,15 +26,15 @@ def _bootstrap_delta(
     r_j: torch.Tensor,
 ) -> torch.Tensor:
     r"""
-    Compute the well-posed bootstrap term delta_ij from Eq. (20) / Appendix A.
+    Compute the bootstrap term delta_ij.
  
     Rewrites \Delta(s_{i,next}, s_{j,next}) in terms of non-terminal
-    pairwise differences and observable rewards, covering all four terminal
+    pairwise differences and observable rewards, for all four terminal
     combinations:
-        Case 1  (d_i=0, d_j=0):  delta = \Delta(s_{i+1}, s_{j+1})
-        Case 2  (d_i=1, d_j=0):  delta = \Delta(s_i, s_{j+1}) - r_i
-        Case 3  (d_i=0, d_j=1):  delta = \Delta(s_{i+1}, s_j) + r_j
-        Case 4  (d_i=1, d_j=1):  delta = 0
+        case 1 (d_i=0, d_j=0): delta = \Delta(s_{i+1}, s_{j+1})
+        case 2 (d_i=1, d_j=0): delta = \Delta(s_i, s_{j+1}) - r_i
+        case 3 (d_i=0, d_j=1): delta = \Delta(s_{i+1}, s_j) + r_j
+        case 4 (d_i=1, d_j=1): delta = 0
  
     Returns:
         delta_ij: unscaled bootstrap term of shape (B,).
@@ -46,8 +46,8 @@ def _bootstrap_delta(
  
     delta_ij = (
         c1 * delta_fn(s_i_next, s_j_next)
-        + c2  * (delta_fn(s_i, s_j_next) - r_i)
-        + c3  * (delta_fn(s_i_next, s_j) + r_j)
+        + c2 * (delta_fn(s_i, s_j_next) - r_i)
+        + c3 * (delta_fn(s_i_next, s_j) + r_j)
     )
 
     return delta_ij

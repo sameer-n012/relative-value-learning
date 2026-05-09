@@ -131,6 +131,7 @@ class PPORVActorCritic(nn.Module):
         self.policy_head = nn.Linear(hidden_dim, n_actions)
         self.critic_head = RelativeCritic(hidden_dim)
         self._init_weights(self.policy_logit_scale)
+        self.is_relative = True # used as flag
 
     @property
     def device(self) -> torch.device:
@@ -195,6 +196,126 @@ class PPORVActorCritic(nn.Module):
         emb_i = self.encode(obs_i)
         emb_j = self.encode(obs_j)
         return self.critic_head(emb_i, emb_j)
+
+    def forward(
+        self,
+        obs_i: torch.Tensor,
+        obs_j: torch.Tensor,
+    ) -> Tuple[Categorical, torch.Tensor]:
+        r"""
+        Joint forward pass for training loop. The action distribution is 
+        used for the policy gradient. The delta value is used for the
+        critic loss.
+        
+        Note that obs_i is the "reference" state for the policy. The critic
+        is trained on arbitrary pairs (i, j) sampled from the rollout buffer.
+
+        Args:
+            obs_i:  input observation tensor of shape (B, C, H, W).
+            obs_j:  input observation tensor of shape (B, C, H, W).
+
+        Returns:
+            dist:   action distribution for obs_i.
+            delta:  \Delta_\theta(obs_i, obs_j).
+        """
+
+        emb_i  = self.encode(obs_i)
+        emb_j  = self.encode(obs_j)
+
+        logits = self.policy_head(emb_i)
+        dist   = Categorical(logits=logits)
+        delta  = self.critic_head(emb_i, emb_j)
+
+        return dist, delta
+
+
+class PPOAVActorCritic(nn.Module):
+    r"""
+    Same as PPORVActorCritic but with an absolute value head for baseline
+    comparison.
+    """
+
+    def __init__(self, n_actions: int, in_channels: int = 4, hidden_dim: int = 512, input_size: int = 84, policy_logit_scale: float = 0.01):
+        super().__init__()
+        self.policy_logit_scale = policy_logit_scale
+        
+        self.encoder = AtariEncoder(
+            in_channels, 
+            hidden_dim,
+            input_size
+        )
+        self.policy_head = nn.Linear(hidden_dim, n_actions)
+        self.critic_head = nn.Linear(hidden_dim, 1, bias=True)
+        self._init_weights(self.policy_logit_scale)
+        self.is_relative = False
+
+    @property
+    def device(self) -> torch.device:
+        return next(self.parameters()).device
+
+    def _init_weights(self, policy_logit_scale: float):
+        r"""
+        Orthogonal initialization of weights.
+        """
+        
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.orthogonal_(m.weight, gain=1.0)
+
+                # zero out bias
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        
+        nn.init.orthogonal_(self.policy_head.weight, gain=policy_logit_scale)
+
+    def encode(self, obs: torch.Tensor) -> torch.Tensor:
+        r"""
+        Encode a batch of observations. 
+
+        Args:
+            obs:        input of shape (B, C, H, W).
+        Returns:
+            f_enc(obs): encoded output
+        """
+
+        return self.encoder(obs)
+
+    def policy(self, obs: torch.Tensor) -> Categorical:
+        r"""
+        Return action distribution for a batch of observations.
+
+        Args:
+            obs:        input of shape (B, C, H, W).
+        Returns:
+            actions:    a Categorical distribution of actions.
+        """
+
+        emb = self.encode(obs)
+        logits = self.policy_head(emb)
+        return Categorical(logits=logits)
+
+    def value(self, obs: torch.Tensor) -> torch.Tensor:
+        r"""
+        Absolute value V(s).
+        """
+        return self.critic_head(self.encode(obs)).squeeze(-1)
+
+    def delta(self, obs_i: torch.Tensor, obs_j: torch.Tensor) -> torch.Tensor:
+        r"""
+        Compute pairwise value difference \Delta_\theta(s_i, s_j).
+
+        Encodes both states using shared encoder and projects the
+        embedding difference.
+
+        Args:
+            obs_i:  input observation tensor of shape (B, C, H, W).
+            obs_j:  input observation tensor of shape (B, C, H, W).
+
+        Returns:
+            delta:  antisymmetric value difference of shape (B,).
+        """
+
+        return self.value(obs_i) - self.value(obs_j)
 
     def forward(
         self,
