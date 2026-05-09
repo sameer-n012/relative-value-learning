@@ -325,7 +325,7 @@ def train(
                 f" length={mean_length:.4f}"
             )
 
-        pbar.set_postfix({"loss": f"{epoch_logs.get('loss_total', 0):.3f}"})
+        pbar.set_postfix({"mean reward": mean_return, "loss": f"{epoch_logs.get('loss_total', 0):.3f}"})
         
         if args.results_file is not None:
             with open(args.results_file, "w") as f:
