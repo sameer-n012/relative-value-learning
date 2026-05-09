@@ -131,9 +131,10 @@ def compute_nstep_target(delta_fn, traj_i, traj_j, gamma: float, n: int) -> torc
     # Accumulate discounted reward differences over n steps
     # y^(n)_ij = \sum_{k=0}^{n-1} gamma^k (r_{i+k} - r_{j+k}) + gamma^n * \Delta(s_{i+n}, s_{j+n})
     # TODO: match batch shape
-    reward_sum = torch.zeros(B)
-    alive_i = torch.ones(B)
-    alive_j = torch.ones(B)
+    device = traj_i[0][1].device
+    reward_sum = torch.zeros(B, device=device)
+    alive_i = torch.ones(B, device=device)
+    alive_j = torch.ones(B, device=device)
 
     for k in range(window):
         s_i, r_i, d_i, _ = traj_i[k]

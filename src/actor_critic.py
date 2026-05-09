@@ -320,7 +320,6 @@ class PPOAVActorCritic(nn.Module):
     def forward(
         self,
         obs_i: torch.Tensor,
-        obs_j: torch.Tensor,
     ) -> Tuple[Categorical, torch.Tensor]:
         r"""
         Joint forward pass for training loop. The action distribution is 
@@ -339,11 +338,8 @@ class PPOAVActorCritic(nn.Module):
             delta:  \Delta_\theta(obs_i, obs_j).
         """
 
-        emb_i  = self.encode(obs_i)
-        emb_j  = self.encode(obs_j)
-
+        emb_i = self.encode(obs_i)
         logits = self.policy_head(emb_i)
-        dist   = Categorical(logits=logits)
-        delta  = self.critic_head(emb_i, emb_j)
-
+        dist = Categorical(logits=logits)
+        delta = self.value(obs_i) - self.value(obs_j)
         return dist, delta

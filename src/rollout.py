@@ -42,8 +42,8 @@ class RolloutBatch:
     obs_j_next: torch.Tensor    # (B, C, H, W)
 
     # for n step loss
-    traj_i = None
-    traj_j = None
+    traj_i: object = None
+    traj_j: object = None
 
 
 class RolloutBuffer:
@@ -458,4 +458,6 @@ class RolloutBuffer:
                 r_j = pairs[5],
                 d_j = pairs[6],
                 obs_j_next = pairs[7],
+                traj_i = traj_i,
+                traj_j = traj_j
             )

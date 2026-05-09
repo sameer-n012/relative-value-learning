@@ -80,7 +80,7 @@ class PPORVUpdater:
         
         # normalize advantages within the minibatch
         adv = batch.advantages
-        adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+        # adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         clipped_ratio = torch.clamp(ratio, 1 - self.cfg.clip_eps, 1 + self.cfg.clip_eps)
         L_policy = torch.min(ratio * adv, clipped_ratio * adv).mean()

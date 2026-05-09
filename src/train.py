@@ -12,6 +12,8 @@ from tqdm import tqdm
 from dataclasses import asdict
 import json
 import time
+from collections import deque
+
 
 
 
@@ -26,7 +28,6 @@ from src.rgae import (
     compute_relative_values
 )
 
-
 def collect_rollout(
     envs,
     model: PPORVActorCritic,
@@ -34,6 +35,8 @@ def collect_rollout(
     obs: torch.Tensor,
     ep_ids: torch.Tensor,
     device: str,
+    curr_returns, 
+    curr_lengths
 ) -> torch.Tensor:
     r"""
     Collect T steps of experience from N_envs parallel environments. Stores 
@@ -54,8 +57,8 @@ def collect_rollout(
 
     returns = []
     eps_lengths = []
-    curr_returns = torch.zeros(buffer.N)
-    curr_lengths = torch.zeros(buffer.N)
+    # curr_returns = torch.zeros(buffer.N)
+    # curr_lengths = torch.zeros(buffer.N)
 
     model.eval()
     with torch.no_grad():
@@ -103,7 +106,7 @@ def collect_rollout(
     mean_return = np.mean(returns) if returns else float("nan")
     mean_length = np.mean(eps_lengths) if eps_lengths else float("nan")
 
-    return obs, ep_ids, {"mean_return": mean_return, "mean_length": mean_length}
+    return obs, ep_ids, {"episodes": returns, "lengths": eps_lengths}, curr_returns, curr_lengths
 
 
 def compute_advantages(
@@ -141,7 +144,12 @@ def compute_advantages(
                 gamma=cfg.gamma, lam=cfg.lam,
             )
             buffer.advantages[:, env_idx] = adv_env
-            buffer.returns[:, env_idx]    = adv_env + V[:, env_idx]
+            buffer.returns[:, env_idx] = adv_env + V[:, env_idx]
+
+        adv = buffer.advantages.view(-1)
+        buffer.advantages.copy_(
+            ((adv - adv.mean()) / (adv.std() + 1e-8)).view(buffer.T, buffer.N)
+        )
         model.train()
         return
 
@@ -191,6 +199,11 @@ def compute_advantages(
             )
             buffer.advantages[:, env_idx] = adv_env
             buffer.returns[:, env_idx]    = adv_env + V_rel[:-1]
+
+        adv = buffer.advantages.view(-1)
+        buffer.advantages.copy_(
+            ((adv - adv.mean()) / (adv.std() + 1e-8)).view(buffer.T, buffer.N)
+        )
 
     model.train()
 
@@ -253,6 +266,11 @@ def train(
         device = device,
     )
 
+    curr_returns = torch.zeros(cfg.n_envs)
+    curr_lengths = torch.zeros(cfg.n_envs)
+    recent_returns = deque(maxlen=100)
+    recent_lengths = deque(maxlen=100)
+
     # obs = torch.tensor(obs_np, dtype=torch.float32) / 255.0
     obs = torch.tensor(obs_np, dtype=torch.float32)
     ep_ids = torch.zeros(cfg.n_envs, dtype=torch.long)
@@ -269,7 +287,7 @@ def train(
         t0 = time.perf_counter()
 
         # collect rollout
-        obs, ep_ids, rollout_stats = collect_rollout(envs, model, buffer, obs, ep_ids, device)
+        obs, ep_ids, rollout_stats, curr_returns, curr_lengths = collect_rollout(envs, model, buffer, obs, ep_ids, device, curr_returns, curr_lengths)
         frames_collected += frames_per_rollout
 
         # compute r-gae
@@ -282,11 +300,18 @@ def train(
 
         t0 = time.perf_counter() - t0
 
+        if rollout_stats["episodes"]:  # list of completed returns this rollout
+            recent_returns.extend(rollout_stats["episodes"])
+            recent_lengths.extend(rollout_stats["lengths"])
+
+        mean_return = np.mean(recent_returns) if recent_returns else float("nan")
+        mean_length = np.mean(recent_lengths) if recent_lengths else float("nan")
+
         train_results["log"].append(epoch_logs)
         train_results["log"][-1]["frames_collected"] = frames_collected
         train_results["log"][-1]["rollout_idx"] = rollout_idx
-        train_results["log"][-1]["mean_return"] = rollout_stats["mean_return"]
-        train_results["log"][-1]["mean_eps_length"] = rollout_stats["mean_length"]
+        train_results["log"][-1]["mean_return"] = mean_return
+        train_results["log"][-1]["mean_eps_length"] = mean_length
         train_results["log"][-1]["time"] = t0
 
         if rollout_idx % log_interval == 0:
@@ -296,8 +321,8 @@ def train(
                 f" critic={epoch_logs.get('loss_critic', 0):.4f}" +
                 f" entropy={epoch_logs.get('loss_entropy', 0):.4f}" +
                 f" total={epoch_logs.get('loss_total', 0):.4f}" +
-                f" return={rollout_stats["mean_return"]:.4f}" +
-                f" length={rollout_stats["mean_length"]:.4f}"
+                f" return={mean_return:.4f}" +
+                f" length={mean_length:.4f}"
             )
 
         pbar.set_postfix({"loss": f"{epoch_logs.get('loss_total', 0):.3f}"})
