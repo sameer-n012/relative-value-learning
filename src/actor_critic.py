@@ -132,6 +132,10 @@ class PPORVActorCritic(nn.Module):
         self.critic_head = RelativeCritic(hidden_dim)
         self._init_weights(self.policy_logit_scale)
 
+    @property
+    def device(self) -> torch.device:
+        return next(self.parameters()).device
+
     def _init_weights(self, policy_logit_scale: float):
         r"""
         Orthogonal initialization of weights.

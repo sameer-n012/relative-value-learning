@@ -121,6 +121,7 @@ def main():
     parser.add_argument("--total-frames", type=int, default=1e7)
     parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--no-offset", action="store_true") # disable trajectory ranking (ablation: zero offset)
+    parser.add_argument("--results-file", type=str, default="results/results.json")
     args = parser.parse_args()
 
     # set rand seed
@@ -137,11 +138,10 @@ def main():
     if args.env.startswith("minatar:"):
         game = args.env.split(":")[1]
         envs = make_minatar_envs(game, args.n_envs)
-        # MinAtar: 10x10xC obs, small action space (~5-6 actions)
-        n_actions = 6 # TODO: query from env
+        n_actions = envs.envs[0].num_actions()
     elif args.env.startswith("atari:"):
         envs = make_atari_envs(args.env, args.n_envs)
-        n_actions = 18 # TODO: query from env
+        n_actions = envs.action_space.n
     else:
         print(f"\tUnknown env: {args.env}")
         return
@@ -154,10 +154,10 @@ def main():
         cfg = cfg,
         device = device,
         use_offset = not args.no_offset,
+        results_file=args.results_file
     )
 
     # checkpoint
-
     ckpt_path = f"checkpoints/{re.sub(r'[^A-Za-z0-9_]', '_', args.env)}_seed{args.seed}.pt"
     torch.save(model.state_dict(), ckpt_path)
     print(f"\tSaved checkpoint: {ckpt_path}")

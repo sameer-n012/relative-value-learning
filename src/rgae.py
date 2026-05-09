@@ -39,16 +39,21 @@ def compute_relative_values(
     """
 
     T_plus1 = states.shape[0]
-    V_rel = torch.zeros(T_plus1)
+    # V_rel = torch.zeros(T_plus1)
 
     # telescoping (slow)
-    for t in range(1, T_plus1):
-        V_rel[t] = V_rel[t - 1] + delta_fn(states[t], states[t - 1])
+    # for t in range(1, T_plus1):
+    #     # delta_fn takes (B, *obs), states[t] is (*obs)
+    #     V_rel[t] = V_rel[t - 1] + delta_fn(
+    #         states[t].unsqueeze(0), 
+    #         states[t - 1].unsqueeze(0).squeeze(0)
+    #     )
 
-    # TODO
-    # direct anchor (fast)
-    # s0 = states[0].unsqueeze(0).expand_as(states[1:])
-    # V_rel[1:] = delta_fn(states[1:], s0)
+    # direct anchor (fast hopefully)
+    s0_expanded = states[0].unsqueeze(0).expand(T_plus1 - 1, *states.shape[1:])
+    deltas = delta_fn(states[1:], s0_expanded)
+
+    V_rel = torch.cat([torch.zeros(1, device=states.device), deltas]) # (T+1,)
 
     return V_rel
 
@@ -83,8 +88,9 @@ def compute_rgae(
     """
 
     T = rewards.shape[0]
-    advantages   = torch.zeros(T)
-    td_residuals = torch.zeros(T)
+    device = rewards.device
+    advantages   = torch.zeros(T, device=device)
+    td_residuals = torch.zeros(T, device=device)
 
     # relative TD residuals
     for t in range(T):
@@ -128,7 +134,7 @@ def extract_start_states(states: torch.Tensor, done: torch.Tensor) -> Tuple[torc
     return start_states, start_indices
 
 
-def compute_trajectory_offsets(delta_fn, all_start_states: torch.Tensor) -> torch.Tensor:
+def compute_trajectory_offsets(model, all_start_states: torch.Tensor) -> torch.Tensor:
     r"""
     Estimate value offsets via row-wise averaging of \Delta_\theta for each start
     state. Estimates are non-negative.
@@ -136,35 +142,57 @@ def compute_trajectory_offsets(delta_fn, all_start_states: torch.Tensor) -> torc
     O(s^n_start) = (1/N) \sum_j \Delta_nj
     V_\theta(s^n_start) = O(n) - min_\gamma O(\gamma)
 
+    Updated to estimate per-start-state value offsets via the score vector.
+    Since \Delta_\theta(s_i, s_j) = w^T(enc(s_i) - enc(s_j)), the N*N row-mean is:
+        O(s_i) = (1/N) \sum_j \Delta(s_i, s_j) = score_i - mean(scores)
+    and then:
+        V(s_i) = score_i - score_min
+
     TODO
     Note that the O(N^2) pairwise computation is feasible for small N. For large N (Atari), 
     subsample pairs.
 
     Args:
-        delta_fn:           delta function as Callable (s_i_batch, s_j_batch) -> (N, N) or looped scalar.
+        model:              PPORV actor critic model
+        # delta_fn:           delta function as Callable (s_i_batch, s_j_batch) -> (N, N) or looped scalar.
         all_start_states:   N start states in shape (N, *obs_shape).
 
     Returns:
         V_hat:              non-negative offset estimates (N,)
     """
 
-    N = all_start_states.shape[0]
+    # N = all_start_states.shape[0]
 
-    # construct N*N pairwise matrix
-    # TODO: vectorize with broadcasting for efficiency
-    delta_matrix = torch.zeros(N, N)
-    for i in range(N):
-        for j in range(N):
-            delta_matrix[i, j] = delta_fn(
-                all_start_states[i].unsqueeze(0),
-                all_start_states[j].unsqueeze(0),
-            ).squeeze()
+    # # faster way
+    # # tile to get (N*N, *obs_shape) pairs per batched delta_fn call,
+    # states_row = all_start_states.repeat_interleave(N, dim=0)
+    # states_col = all_start_states.repeat(N, *([1] * (all_start_states.dim() - 1)))
+
+    # # compute as (N*N,) the reshape as (N, N)
+    # delta_flat = delta_fn(states_row, states_col)
+    # delta_matrix = delta_flat.view(N, N)
 
     # row-wise mean
-    O = delta_matrix.mean(dim=1)
+    # O = delta_matrix.mean(dim=1)
 
     # non-negation
-    V_hat = O - O.min()
+    # V_hat = O - O.min()
+
+    # old way to construct N*N pairwise matrix (slow)
+    # delta_matrix = torch.zeros(N, N)
+    # for i in range(N):
+    #     for j in range(N):
+    #         delta_matrix[i, j] = delta_fn(
+    #             all_start_states[i].unsqueeze(0),
+    #             all_start_states[j].unsqueeze(0),
+    #         ).squeeze()
+
+    # maybe faster maybe accurate
+    with torch.no_grad():
+        embs = model.encode(all_start_states) # (N, d)
+        scores = model.critic_head.w(embs).squeeze(-1) # (N,)
+
+    V_hat = scores - scores.min()
 
     return V_hat
 
@@ -188,17 +216,30 @@ def apply_offset_to_rollout(delta_fn, states: torch.Tensor, done: torch.Tensor, 
     """
 
     T_plus1 = states.shape[0]
-    V_bar   = torch.zeros(T_plus1)
+    V_bar = torch.zeros(T_plus1, device=states.device)
 
     # timestep -> most recent state mapping
-    start_ptr = 0
-    for t in range(T_plus1):
-        if start_ptr + 1 < len(start_indices) and t >= start_indices[start_ptr + 1]:
-            start_ptr += 1
+    # start_ptr = 0
+    # for t in range(T_plus1):
+    #     if start_ptr + 1 < len(start_indices) and t >= start_indices[start_ptr + 1]:
+    #         start_ptr += 1
 
-        s_start = states[start_indices[start_ptr]].unsqueeze(0)
-        offset = V_hat_starts[start_ptr]
-        delta_t = delta_fn(states[t].unsqueeze(0), s_start).squeeze()
-        V_bar[t] = offset + delta_t
+    #     s_start = states[start_indices[start_ptr]].unsqueeze(0)
+    #     offset = V_hat_starts[start_ptr]
+    #     delta_t = delta_fn(states[t].unsqueeze(0), s_start).squeeze()
+    #     V_bar[t] = offset + delta_t
+
+    # return V_bar
+
+    # batched delta_fn maybe faster
+    n_segs = len(start_indices)
+    for k in range(n_segs):
+        seg_start = start_indices[k].item()
+        seg_end = start_indices[k + 1].item() if k + 1 < n_segs else T_plus1
+
+        seg_states = states[seg_start:seg_end]
+        s_start = states[seg_start].unsqueeze(0).expand_as(seg_states)
+
+        V_bar[seg_start:seg_end] = V_hat_starts[k] + delta_fn(seg_states, s_start)
 
     return V_bar

@@ -131,7 +131,7 @@ def compute_nstep_target(delta_fn, traj_i, traj_j, gamma: float, n: int) -> torc
     # Accumulate discounted reward differences over n steps
     # y^(n)_ij = \sum_{k=0}^{n-1} gamma^k (r_{i+k} - r_{j+k}) + gamma^n * \Delta(s_{i+n}, s_{j+n})
     # TODO: match batch shape
-    reward_sum = torch.zeros(1)
+    reward_sum = torch.zeros(B)
     alive_i = torch.ones(B)
     alive_j = torch.ones(B)
 
@@ -147,13 +147,13 @@ def compute_nstep_target(delta_fn, traj_i, traj_j, gamma: float, n: int) -> torc
         alive_j = alive_j * (1.0 - d_j)
 
 
-    s_i_n, r_i_n, d_i_n, sn_i_n = traj_i[min_len - 1]
-    s_j_n, r_j_n, d_j_n, sn_j_n = traj_j[min_len - 1]
+    s_i_n, r_i_n, d_i_n, sn_i_n = traj_i[window - 1]
+    s_j_n, r_j_n, d_j_n, sn_j_n = traj_j[window - 1]
 
     # extract s_next and apply case split
     bootstrap = _bootstrap_delta(
         delta_fn,
-        s_i,
+        s_i_n,
         torch.clamp(d_i_n + (1.0 - alive_i), 0.0, 1.0),
         sn_i_n,
         r_i_n,

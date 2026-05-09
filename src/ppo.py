@@ -20,7 +20,7 @@ from typing import Dict
 
 from src.actor_critic import PPORVActorCritic
 from src.rollout import RolloutBatch, RolloutBuffer
-from src.bellman import compute_step_target
+from src.bellman import compute_step_target, compute_nstep_target
 
 
 @dataclass
@@ -92,9 +92,6 @@ class PPORVUpdater:
         Pairwise critic MSE loss using n-step targets.
 
         L_critic = 0.5 * E_{(i,j) \sim \mu} [ (\Delta_\theta(s_i, s_j) - y^(n)_ij)^2 ]
-
-        Uses the 1-step target. 
-        TODO Extend to n-step by composing compute_step_target.
         """
 
         # current pred
@@ -102,12 +99,24 @@ class PPORVUpdater:
 
         # compute 1-step target
         with torch.no_grad():
-            y_ij = compute_step_target(
-                delta_fn=self.model.delta,
-                s_i=batch.obs_i, r_i=batch.r_i, d_i=batch.d_i, s_i_next=batch.obs_i_next,
-                s_j=batch.obs_j, r_j=batch.r_j, d_j=batch.d_j, s_j_next=batch.obs_j_next,
-                gamma=self.cfg.gamma,
-            )
+            if self.cfg.n_step > 1 and batch.traj_i is not None:
+                traj_i = [(s.to(self.model.device), r.to(self.model.device),
+                        d.to(self.model.device), sn.to(self.model.device))
+                        for s, r, d, sn in batch.traj_i]
+                traj_j = [(s.to(self.model.device), r.to(self.model.device),
+                        d.to(self.model.device), sn.to(self.model.device))
+                        for s, r, d, sn in batch.traj_j]
+                y_ij = compute_nstep_target(
+                    self.model.delta, traj_i, traj_j,
+                    gamma=self.cfg.gamma, n=self.cfg.n_step,
+                )
+            else:
+                y_ij = compute_step_target(
+                    delta_fn=self.model.delta,
+                    s_i=batch.obs_i, r_i=batch.r_i, d_i=batch.d_i, s_i_next=batch.obs_i_next,
+                    s_j=batch.obs_j, r_j=batch.r_j, d_j=batch.d_j, s_j_next=batch.obs_j_next,
+                    gamma=self.cfg.gamma,
+                )
 
         # clip the value target (not needed?)
         # delta_pred_clipped = torch.clamp(
@@ -136,7 +145,7 @@ class PPORVUpdater:
         
         L_policy = self.policy_loss(batch)
         L_critic = self.critic_loss(batch)
-        L_entropy    = self.entropy_loss(batch)
+        L_entropy = self.entropy_loss(batch)
 
         loss = (
             -L_policy + 
@@ -148,6 +157,7 @@ class PPORVUpdater:
         loss.backward()
         nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
         self.optim.step()
+
 
         return {
             "loss_total":   loss.item(),
@@ -162,7 +172,7 @@ class PPORVUpdater:
         Run one PPO epoch over the rollout buffer. Called n_epochs times per 
         rollout.
         """
-
+        
         epoch_logs: Dict[str, list] = {
             "loss_total":   [],
             "loss_policy":  [],
@@ -170,7 +180,7 @@ class PPORVUpdater:
             "loss_entropy": [],
         }
 
-        for batch in buffer.get_minibatches(self.cfg.minibatch_size):
+        for batch in buffer.get_minibatches(self.cfg.minibatch_size, n_step = self.cfg.n_step):
             logs = self.update(batch)
             for k, v in logs.items():
                 epoch_logs[k].append(v)

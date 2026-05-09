@@ -9,6 +9,11 @@ import torch
 import numpy as np
 from typing import Optional
 from tqdm import tqdm
+from dataclasses import asdict
+import json
+import time
+
+
 
 from src.actor_critic import PPORVActorCritic
 from src.rollout import RolloutBuffer
@@ -99,39 +104,50 @@ def compute_advantages(
 
     model.eval()
     with torch.no_grad():
-        delta_fn = lambda s_i, s_j: model.delta(s_i.to(device), s_j.to(device)).cpu()
+        delta_fn = lambda s_i, s_j: model.delta(s_i.to(device), s_j.to(device))
 
-        # per-env advantage computation
+        # pool start states across all envs for global ranking.
+        all_start_states, all_start_idx = [], []
         for env_idx in range(buffer.N):
-
             states_env = torch.cat([
                 buffer.obs[:, env_idx],
                 buffer.obs_next[-1, env_idx].unsqueeze(0),
             ], dim=0)
+            s_starts, s_idx = extract_start_states(states_env, buffer.dones[:, env_idx])
+            all_start_states.append(s_starts)
+            all_start_idx.append(s_idx)
 
-            dones_env  = buffer.dones[:, env_idx]
-
-            if use_offset:
-                start_states, start_idx = extract_start_states(states_env, dones_env)
-
-                # get all start states across envs for global ranking
-                # TODO currently rank per-env; paper implementation pools across envs
-                V_hat = compute_trajectory_offsets(delta_fn, start_states)
-                V_rel = apply_offset_to_rollout(delta_fn, states_env, dones_env, V_hat, start_idx)
-            else:
-                # zero init
-                V_rel = compute_relative_values(delta_fn, states_env)
-
-            advantages_env, _ = compute_rgae(
-                rewards = buffer.rewards[:, env_idx],
-                V_rel = V_rel,
-                done = dones_env,
-                gamma = cfg.gamma,
-                lam = cfg.lam,
+        if use_offset:
+            V_hat_global = compute_trajectory_offsets(
+                model, torch.cat(all_start_states, dim=0)
             )
 
-            buffer.advantages[:, env_idx] = advantages_env
-            buffer.returns[:, env_idx] = advantages_env + V_rel[:-1]
+        # per env R-GAE.
+        ptr = 0
+        for env_idx in range(buffer.N):
+            states_env = torch.cat([
+                buffer.obs[:, env_idx],
+                buffer.obs_next[-1, env_idx].unsqueeze(0),
+            ], dim=0)
+            dones_env = buffer.dones[:, env_idx]
+            start_idx = all_start_idx[env_idx]
+
+            if use_offset:
+                n_starts = len(start_idx)
+                V_hat_env = V_hat_global[ptr : ptr + n_starts]
+                ptr += n_starts
+                V_rel = apply_offset_to_rollout(
+                    delta_fn, states_env, dones_env, V_hat_env, start_idx
+                )
+            else:
+                V_rel = compute_relative_values(delta_fn, states_env)
+
+            adv_env, _ = compute_rgae(
+                rewards=buffer.rewards[:, env_idx],
+                V_rel=V_rel, done=dones_env, gamma=cfg.gamma, lam=cfg.lam,
+            )
+            buffer.advantages[:, env_idx] = adv_env
+            buffer.returns[:, env_idx]    = adv_env + V_rel[:-1]
 
     model.train()
 
@@ -143,7 +159,8 @@ def train(
     cfg: PPORVConfig = None,
     device: Optional[str] = None,
     use_offset: bool = True,
-    log_interval: int = 10,
+    log_interval: int = 100,
+    results_file: str = None
 ):
     """
     Full PPO+RV training loop.
@@ -164,7 +181,9 @@ def train(
     if device is None:
         device = ("cuda" if torch.cuda.is_available() else "cpu")
 
-
+    train_results = asdict(cfg)
+    train_results["device"] = device
+    train_results["log"] = []
 
     obs_np = envs.reset()
     obs_shape = obs_np.shape[1:] # (C,H,W)
@@ -183,8 +202,8 @@ def train(
         device = device,
     )
 
-
-    obs = torch.tensor(obs_np, dtype=torch.float32) / 255.0
+    # obs = torch.tensor(obs_np, dtype=torch.float32) / 255.0
+    obs = torch.tensor(obs_np, dtype=torch.float32)
     ep_ids = torch.zeros(cfg.n_envs, dtype=torch.long)
 
     frames_per_rollout = cfg.rollout_length * cfg.n_envs
@@ -194,6 +213,9 @@ def train(
     pbar = tqdm(range(n_rollouts), total=n_rollouts, desc="Training", unit="rollout")
     for rollout_idx in pbar:
         buffer.reset()
+        timings = {}
+
+        t0 = time.perf_counter()
 
         # collect rollout
         obs, ep_ids = collect_rollout(envs, model, buffer, obs, ep_ids, device)
@@ -207,13 +229,26 @@ def train(
         for _ in range(cfg.n_epochs):
             epoch_logs = updater.train_epoch(buffer)
 
+        t0 = time.perf_counter() - t0
+
+        train_results["log"].append(epoch_logs)
+        train_results["log"][-1]["frames_collected"] = frames_collected
+        train_results["log"][-1]["rollout_idx"] = rollout_idx
+        train_results["log"][-1]["time"] = t0
 
         if rollout_idx % log_interval == 0:
-            print(
-                f"[{frames_collected:>10,} frames, rollout {rollout_idx}]"
-                f"policy={epoch_logs.get('loss_policy', 0):.4f}"
-                f"critic={epoch_logs.get('loss_critic', 0):.4f}"
-                f"entropy={epoch_logs.get('loss_entropy', 0):.4f}"
+            tqdm.write(
+                f"[{frames_collected} frames, rollout {rollout_idx}]" +
+                f" policy={epoch_logs.get('loss_policy', 0):.4f}" +
+                f" critic={epoch_logs.get('loss_critic', 0):.4f}" +
+                f" entropy={epoch_logs.get('loss_entropy', 0):.4f}" +
+                f" total={epoch_logs.get('loss_total', 0):.4f}"
             )
+
+        pbar.set_postfix({"loss": f"{epoch_logs.get('loss_total', 0):.3f}"})
+        
+        if results_file is not None:
+            with open(results_file, "w") as f:
+                json.dump(train_results, f, indent=2)
 
     return model
