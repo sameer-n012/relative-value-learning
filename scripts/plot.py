@@ -34,12 +34,12 @@ def extract_series(logs, x_key="frames_collected"):
 def plot_curve(xs, metrics):
     fig = plt.figure()
 
-    window_size = 200
+    window_size = 50
     cutoff = 5000000
 
-    for k, v in x.items():
+    for k, v in xs.items():
         x = xs[k][:cutoff]
-        y = m[k]["mean_return"][:cutoff]
+        y = metrics[k]["mean_return"][:cutoff]
 
         y_smooth = np.convolve(
             y,
@@ -50,7 +50,7 @@ def plot_curve(xs, metrics):
         x_smooth = x[window_size - 1:]
         plt.plot(x_smooth, y_smooth, linewidth=2, label=k)
 
-    plt.title("Mean Return Moving Average (Asterix)", fontsize=16)
+    plt.title("Mean Return Moving Average (Seaquest)", fontsize=16)
     plt.xlabel("Frames")
     plt.ylabel("Mean Return")
     plt.legend()
@@ -63,10 +63,10 @@ def plot_curve(xs, metrics):
 
 def main():
 
-    env = "asterix"
+    env = "seaquest"
     data_rv = load_results(f"results/rv_{env}.json")["log"]
-    data_rv = load_results(f"results/rvo_{env}.json")["log"]
-    data_rv = load_results(f"results/baseline_{env}.json")["log"]
+    data_rvo = load_results(f"results/rvo_{env}.json")["log"]
+    data_baseline = load_results(f"results/baseline_{env}.json")["log"]
 
     x_rv, metrics_rv = extract_series(data_rv)
     x_rvo, metrics_rvo = extract_series(data_rvo)
